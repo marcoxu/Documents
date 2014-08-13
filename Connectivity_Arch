@@ -1,0 +1,619 @@
+NetworkManagementService
+1. Started by System Server
+1. Observer pattern
+2. Notify all registered observers about the network interface state change
+3. Network state is originated from Netd
+
+NetD
+1. A native daemon service
+2. Monitors the network interfaces in system and notify NetworkManagementService about any state change
+3. system/netd/main.cpp, starts CommandListener which handles the commands from NetworkManagementService
+4. system/netd/CommandListener
+
+ConnectivityService
+1. Introduce an array mNetTrackers to contain NetworkStateTrackers for each type of networks such as mobile data, wifi etc
+2. register observer mTethering and mDataActivityObserver to NetworkManagementService
+3. Events that are detected by NetworkStateTrackers are sent to mTrackerHandler to handling
+4. Prefered network is determined by isNewNetTypePreferredOverCurrentNetType
+
+    <string-array translatable="false" name="networkAttributes">
+        <item>"wifi,1,1,1,-1,true"</item>
+        <item>"mobile,0,0,0,-1,true"</item>
+        <item>"mobile_mms,2,0,2,60000,true"</item>
+        <item>"mobile_supl,3,0,2,60000,true"</item>
+        <item>"mobile_hipri,5,0,3,60000,true"</item>
+        <item>"mobile_fota,10,0,2,60000,true"</item>
+        <item>"mobile_ims,11,0,2,60000,true"</item>
+        <item>"mobile_cbs,12,0,2,60000,true"</item>
+        <item>"wifi_p2p,13,1,0,-1,true"</item>
+    </string-array>
+
+NetworkPolicyManagerService
+1. Service that maintains low-level network policy rules
+
+RILD:
+Startup
+  main
+     --> dlopen (/system/lib/libreference-ril.so)
+     --> RIL_startEventLoop
+       --> start thread to loop on method eventLoop
+     --> rilInit = RIL_Init
+       --> start thread to loop on method mainLoop
+         --> socket_local_client (create socket to communicate with modem)
+         --> at_open
+           --> start thread to loop on method readerLoop (read response from modem)
+     --> RIL_register
+        --> RIL_startEventLoop
+          --> start thread to loop on method eventLoop
+            --> ril_event_loop
+              --> processReadReadies
+              --> firePending (handle the events)
+                --> ev->func(ev->fd, 0, ev->param) = listenCallback
+                  --> rilEventAddWakeup (&s_commands_event); (register for processCommandsCallback)
+
+                --> ev->func(ev->fd, 0, ev->param) = processCommandsCallback
+                  --> processCommandBuffer
+                    --> pRI->pCI->dispatchFunction (find corresponding handler in ril_commands.h) = RIL_REQUEST_DIAL dispatchDial (for dialing)
+                      --> s_callbacks.onRequest(pRI->pCI->requestNumber, &dial, sizeOfDial, pRI); (callback is initialized by rild main with the return value of RIL_Init)
+                        --> onRequest (reference-ril.c)
+                          --> requestDial
+                            --> at_send_command
+                              --> at_send_command_full
+                                --> at_send_command_full_nolock
+                                  --> writeline
+                            --> RIL_onRequestComplete = RIL_onRequestComplete (defined in s_rilEnv)
+                              --> sendResponse
+                                --> sendResponseRaw (send reponse back via socket over rild)
+                
+        --> android_get_control_socket(SOCKET_NAME_RIL) (create socket on rild)
+        --> rilEventAddWakeup (register callback listenCallback)
+
+
+Access Network. Use AndroidHttpClient as example
+AndroidHttpClient
+
+wpa_supplicant
+  main entry (wpa_cli.c)
+  main
+     --> eloop_init
+     --> wpa_ctrl_open
+     --> wpa_cli_open_connection
+     --> wpa_cli_action
+ 
+ wpa_supplicant daemon
+ main
+    --> wpa_supplicant_init
+    --> wpa_supplicant_add_iface
+       --> wpa_supplicant_alloc
+       --> wpa_supplicant_init_iface
+         --> wpa_supplicant_set_driver
+         --> wpa_drv_init
+         --> wpa_supplicant_init_wpa
+         --> wpa_drv_get_hw_feature_data
+         --> wpa_supplicant_driver_init
+         --> wpas_wps_init
+         --> wpa_supplicant_init_eapol
+         --> wpa_supplicant_ctrl_iface_init
+           --> ctrl_open_pipe
+             --> wpa_supplicant_ctrl_iface_receive
+               --> ctrl_iface_write_completed
+                  -->ctrl_iface_read_completed
+                     --> wpa_supplicant_ctrl_iface_rx/wpa_supplicant_ctrl_iface_receive
+                        --> wpa_supplicant_ctrl_iface_process
+                           --> wpa_supplicant_req_scan
+       --> wpa_supplicant_run
+       --> wpa_supplicant_daemon
+       --> eloop_run
+  Scan AP
+  wpa_cli_cmd_scan
+     --> wpa_ctrl_command (SCAN)
+        --> _wpa_ctrl_command
+           --> wpa_ctrl_request
+              --> WriteFile
+           
+                     -->ctrl_iface_read_completed
+                        --> wpa_supplicant_ctrl_iface_rx/wpa_supplicant_ctrl_iface_receive
+                           --> wpa_supplicant_ctrl_iface_process
+                              --> wpa_supplicant_req_scan
+                                 --> wpa_supplicant_scan
+                                    --> wpa_supplicant_trigger_scan
+                                       --> wpa_drv_scan
+                                          --> wpa_s->driver->scan
+
+Network device
+Create and registration
+   prism2sta_probe_usb
+      --> wlan_setup
+         --> alloc_netdev = alloc_netdev_mqs
+            --> dev_addr_init
+               --> __hw_addr_init
+               --> __hw_addr_add
+            --> dev_mc_init
+            --> dev_uc_init
+            --> dev_net_set
+            --> setup = ether_setup
+         
+   register_wlandev
+      --> register_netdev
+         --> register_netdevice
+
+   ether1_open
+      --> request_irq
+      --> ether1_init_for_open
+      --> netif_start_queue
+         --> netif_tx_start_queue
+      
+   ip_init   
+      --> ip_rt_init
+         --> devinet_init
+            --> register_gifconf
+            --> register_netdevice_notifier
+               --> notifier_chain_register
+                  --> notifier_call NETDEV_REGISTER
+                  --> notifier_call NETDEV_UP
+            --> rtnl_register
+         --> ip_fib_init
+            --> register_netdevice_notifier
+            --> register_inetaddr_notifier (fib_inetaddr_notifier)
+               --> .notifier_call = fib_inetaddr_event
+                  --> NETDEV_UP: fib_add_ifaddr
+                     --> fib_magic
+                        --> fib_new_table
+                        --> fib_table_insert
+      
+      --> dev_ifconf
+         --> inet_gifconf
+         
+Linux Startup
+  start_kernel 
+     --> boot_cpu_init
+     --> mm_init_owner        
+     --> page_alloc_init        
+     --> mm_init        
+     --> init_IRQ        
+     --> softirq_init        
+     --> kmem_cache_init_late        
+     --> rest_init 
+        --> kernel_thread(kernel_init)
+           --> do_basic_setup
+              --> driver_init
+              --> init_irq_proc
+              --> do_initcalls
+                 --> do_one_initcall (__early_initcall_end -> __initcall_end)
+                    --> net_dev_init
+                       --> dev_proc_init
+                          --> register_pernet_subsys(&dev_proc_ops)
+                             --> register_pernet_operations(first_device, ops)
+                       --> netdev_kobject_init
+                       --> register_pernet_device
+                       --> register_pernet_device
+                       --> dst_init
+                       --> dev_mcast_init
+        --> kernel_thread(kthreadd)
+        
+
+static struct pernet_operations __net_initdata dev_proc_ops = {
+	.init = dev_proc_net_init,
+	.exit = dev_proc_net_exit,
+};
+
+How to create IP route:
+rtable is route cache. fib_table is the actual route table.
+
+query route:
+connect (socket)
+    --> tcp_v4_connect/inet_sk_reselect_saddr
+       --> ip_route_connect
+          --> __ip_route_output_key
+             --> ip_route_output_slow
+                --> fib_lookup
+                --> fib_select_default	
+                --> __mkroute_output
+                   --> rt_intern_hash
+
+Maintenance of fib_table
+ Manually add/del route
+ ip_rt_ioctl
+    --> fib_get_table
+    --> fib_table_delete
+    or
+    --> fib_new_table
+    --> fib_table_insert
+    
+ ip_fib_init (register handler for RTM_NEWROUTE)
+ inet_rtm_newroute
+    --> fib_new_table
+    --> fib_table_insert
+ 
+ fib_add_ifaddr
+ fib_magic
+    --> fib_new_table
+    --> fib_table_insert
+    
+ fib_empty_table
+    --> fib_new_table
+    
+ 
+ inetdev_event
+ NETDEV_UP/SIOCSIFDSTADDR: inet_insert_ifa
+    --> __inet_insert_ifa
+       --> inet_hash_insert
+       --> rtmsg_ifa
+          --> inet_rtm_newaddr
+             --> __inet_insert_ifa
+       --> blocking_notifier_call_chain
+       
+ dev_ifsioc
+    --> dev_change_flags
+       --> rtmsg_ifinfo(RTM_NEWLINK, dev, changes);
+          --> rtnl_newlink
+             --> register_netdevice
+                --> call_netdevice_notifiers
+                --> netdev_register_kobject 
+                --> call_netdevice_notifiers
+                   --> raw_notifier_call_chain
+                      --> __raw_notifier_call_chain
+                         --> notifier_call_chain
+                            --> inetdev_event
+                               --> inetdev_init
+                                  --> devinet_sysctl_register
+                                  --> ip_mc_init_dev
+                                  --> ip_mc_up
+                                     --> ip_mc_inc_group
+                                        --> ip_rt_multicast_event
+                   --> fib_rules_event
+                      --> NETDEV_REGISTER: attach_rules  
+                      
+                      ContextImpl.java
+        (TELEPHONY_SERVICE, new ServiceFetcher() {
+
+RILD:
+main
+   --> RIL_startEventLoop
+      --> start thread on eventLoop
+         --> ril_event_loop
+   --> rilInit
+   --> RIL_register
+   
+QCRIL:
+RIL_Init
+   --> qcril_ipc_init
+   --> qmi_ril_fw_android_request_flow_control_init
+   --> qmi_ril_init_android_unsol_resp_pending_list
+   --> qcril_event_init
+      --> start thread on qcril_event_main
+         --> qcril_process_event
+            --> qcril_dispatch_event
+               --> (entry_ptr->handler)(params_ptr, &ret) ==> qcril_event_table
+                  --> RIL_REQUEST_SETUP_DATA_CALL: qcril_data_request_setup_data_call
+                     --> dsi_req_start_data_call
+                        --> (hndl))->start_data_call( hndl )
+               --> qcril_state_transition
+   --> qcril_init
+   --> qcril_event_start
+   --> core_handler_start
+   --> cri_core_start
+   --> qmi_ril_initiate_bootup
+   
+Qmuxd
+main
+   --> qmi_qmux_pwr_up_init
+   --> linux_qmi_read_sysfs_config
+   --> linux_qmi_qmux_if_configure_ports
+   --> qmi_qmux_open_connection
+      --> QMI_QMUX_IO_PLATFORM_OPEN_CONN
+        --> Start thread to execute linux_qmi_qmux_io_rx_msg
+          --> linux_qmi_qmux_io_rx_cb = qmi_qmux_rx_msg
+             --> qmi_qmux_rx_client_broadcast
+             --> qmi_qmux_rx_client_msg
+                --> qmi_ctl_rx_msg
+                --> qmi_qmux_if_send_to_client
+   --> linux_qmi_qmux_if_server_init_listeners
+   --> linux_qmi_qmux_if_process_listener_socket_requests
+   
+   
+   linux_qmi_qmux_io_open_conn
+   linux_qmi_qmux_io_rx_msg
+   linux_qmi_qmux_io_rx_cb = qmi_qmux_rx_msg
+      --> qmi_qmux_rx_client_broadcast
+      --> qmi_qmux_rx_client_msg
+         --> qmi_ctl_rx_msg
+         --> qmi_qmux_if_send_to_client
+   linux_qmi_qmux_io_event_cb = qmi_qmux_event_cb
+   
+Qucomm NetMgr
+main
+   --> netmgr_main
+      --> netmgr_main_reset_links
+      --> netmgr_main_parse_args
+      --> netmgr_main_update_links
+      --> netmgr_kif_powerup_init
+         --> netmgr_kif_init_names
+         --> netmgr_kif_ifioctl_open_port
+      --> netmgr_qmi_init
+         --> netmgr_qmi_link_init
+         --> netmgr_qmi_driver_init
+            --> qmi_init
+               --> qmi_service_pwr_up_init
+                  --> qmi_qmux_if_pwr_up_init
+                     --> qmi_qmux_if_pwr_up_init_ex
+                        --> QMI_QMUX_IF_PLATFORM_CLIENT_INIT = linux_qmi_qmux_if_client_init
+                           --> linux_qmi_qmux_if_connect
+                              --> pthread_create (start thread on linux_qmi_qmux_if_rx_msg)
+                              --> QMI_SLL_ADD (linux_qmi_qmux_if_client_list)
+                        --> QMI_SLL_ADD (qmi_qmux_if_client_data_list)
+                        --> qmi_qmux_if_send_if_msg_to_qmux
+               --> QMI_SLL_ADD (qmi_sys_event_client_list)
+      --> netmgr_kif_init
+      --> netmgr_main_sm_inited
+      
+  netmgr_sm_modem_connected_while_going_down/netmgr_sm_kif_opened
+  netmgr_kif_iface_configure
+  iface_configure=netmgr_kif_configure
+  netmgr_kif_cfg_req
+    --> ioctl(sockfd, SIOCSIFADDR, &ifr)
+    --> ioctl(sockfd, SIOCSIFNETMASK, &ifr)
+  netmgr_kif_rev_rmnet_cfg_req
+     --> netmgr_util_convert_ip_addr_to_str
+     --> ds_system_call2
+      
+Config IPSec:
+netmgr_sm_state_up_entry (NETMGR_STATE_UP)
+   --> netmgr_kif_install_sa_and_routing_rules
+      --> netmgr_kif_install_iptable_rules
+      --> netmgr_kif_install_forwarding_rules
+         --> netmgr_util_convert_ip_addr_to_str
+
+  netmgr_kif_remove_forwarding_rules
+     --> netmgr_util_convert_ip_addr_to_str
+
+  netmgr_kif_get_xfrm_policy_sel_str
+     --> netmgr_util_convert_ip_addr_to_str
+
+  netmgr_kif_remove_forwarding_rules
+     --> netmgr_util_convert_ip_addr_to_str
+
+
+typedef enum netmgr_kif_state_e {
+    NETMGR_KIF_CLOSED          = 0, /* Interface 'down' state */
+    NETMGR_KIF_OPENING         = 1, /* Interface coming up */
+    NETMGR_KIF_CLOSING         = 2, /* Interface deconfigured and going down */
+    NETMGR_KIF_OPEN            = 3, /* Interface up and configured */
+    NETMGR_KIF_RECONFIGURING   = 4  /* Interface up and being reconfigured */
+} netmgr_kif_state_t;
+
+main
+   --> netmgr_main
+      --> netmgr_kif_init
+         --> netmgr_kif_init_ifaces
+            --> netmgr_kif_init_iface
+        
+     netmgr_sm_modem_connected
+        --> netmgr_kif_iface_open
+           --> iface_open = netmgr_kif_open
+     
+     netmgr_sm_kif_down_to_come_up
+        --> netmgr_kif_iface_open
+           --> iface_open = netmgr_kif_open
+
+    rc = qmi_qmux_if_pwr_up_init(qmi_service_receive_msg_hdlr,
+                                 qmi_service_sys_event_handler,
+                                 event_user_data,
+                                 &qmi_service_qmux_if_handle);
+
+dsc_main
+   --> dsc_qmi_init
+      --> dsc_qmi_driver_init
+         --> qmi_wds_srvc_init_client
+            --> qmi_service_init
+               --> srvc->user_ind_msg_hdlr = user_ind_msg_hdlr
+         --> qmi_init  
+            --> qmi_service_pwr_up_init (qmi_sys_event_hdlr)
+               --> qmi_qmux_if_pwr_up_init (qmi_service_receive_msg_hdlr)
+                  --> qmi_qmux_if_pwr_up_init_ex (qmi_service_receive_msg_hdlr)
+                     --> qmi_qmux_if_client_data->rx_msg_hdlr = rx_msg_hdlr
+   
+main (QTI)
+   --> qti_netlink_init
+   --> qti_cmdq_init
+      --> ds_cmdq_init
+         --> ds_cmdthrd_init
+            --> start thread on ds_cmdthrd_main (dequeue command and handle it)
+               --> ds_cmdq_deq
+               --> cmd->execute_f = netmgr_exec_cmd_process
+                  --> stm_instance_process_input
+                     --> stm_process_input
+                        --> stm_process_input
+                        --> stm_call_state_entry
+                           --> entry_fn
+                     --> trans_fn(sm, payload) = NETMGR_SM_transitions[x]
+   --> qti_nl_listener_init
+   --> qti_rmnet_qmux_open
+      --> qmi_qmux_if_pwr_up_init_ex
+         --> linux_qmi_qmux_if_client_init (start thread to rx_msg)
+            --> linux_qmi_qmux_if_connect
+            --> linux_qmi_qmux_if_client_get_client_id
+            --> pthread_create( linux_qmi_qmux_if_rx_msg )
+         
+         --> linux_qmi_qmux_if_rx_msg
+            --> qmi_qmux_if_rx_msg
+               --> tmp_client_data.rx_msg_hdlr = qmi_service_receive_msg_hdlr
+
+               --> qmi_service_receive_msg_hdlr
+                  --> qmi_service_process_all_rx_indications
+                    --> qmi_service_process_rx_indication
+                       --> NETMGR_QMI_MSG_CMD: netmgr_sm_dispatch_qmi_msg
+                          --> netmgr_qmi_dispatch
+                             --> dispatch: netmgr_qmi_cmd_exec
+                                --> netmgr_wds_ind
+                                   --> QMI_WDS_SRVC_PKT_SRVC_STATUS_IND_MSG: netmgr_wds_pkt_srvc_status_ind
+                                   --> QMI_WDS_PACKET_DATA_CONNECTED: netmgr_exec_put_cmd
+                                      --> ds_cmdq_enq    
+
+The QMI QMUX linux server:
+linux_qmi_qmux_if_server->main
+   --> qmi_qmux_open_connection (open connection for all conn_id in linux_qmi_conn_id_enablement_array)
+
+DSC maximum 3 links:     QMI_CONN_ID_RMNET_0,  QMI_CONN_ID_RMNET_1, QMI_CONN_ID_RMNET_2
+DSI NETCTRL: 16 links: QMI_CONN_ID_RMNET_0, QMI_CONN_ID_RMNET_1, QMI_CONN_ID_RMNET_2, QMI_CONN_ID_RMNET_3, QMI_CONN_ID_RMNET_4
+NETMGR: 4 links: 
+
+qmi_dev_connection_init
+qmi_service_connection_init
+qmi_qmux_if_open_connection
+   --> qmi_qmux_open_connection
+
+qmi_client_init
+qmi_service_connection_init
+qmi_qmux_if_open_connection
+   --> qmi_qmux_open_connection
+
+qmi_qmux_add_delete_qmux_if_client
+qmi_qmux_if_send_to_client
+
+qmi_qmux_broadcast_sys_ind_to_all_clients
+qmi_qmux_if_send_to_client
+
+qmi_qmux_open_connection
+   --> linux_qmi_qmux_io_open_conn
+      --> linux_qmi_qmux_io_rx_msg
+         --> linux_qmi_qmux_io_rx_cb = qmi_qmux_rx_msg
+            --> qmi_qmux_rx_client_broadcast
+               --> qmi_qmux_if_send_to_client
+                  --> qmi_qmux_if_rx_msg
+            --> qmi_qmux_rx_client_msg
+               --> qmi_qmux_if_send_to_client
+                  --> qmi_qmux_if_rx_msg
+                     --> tmp_client_data.rx_msg_hdlr = qmi_service_receive_msg_hdlr
+                        --> qmi_service_process_all_rx_indications               
+                           --> qmi_service_process_rx_indication
+                              --> func_ptr =  srvc->user_ind_msg_hdlr = netmgr_qmi_wds_ind
+                                 --> netmgr_exec_put_cmd
+                                    --> ds_cmdq_enq (NETMGR_QMI_MSG_CMD)
+                     --> qmi_qmux_if_handle_sys_ind_msg
+                        --> qmi_qmux_if_send_if_msg_to_qmux
+                           --> qmi_qmux_if_send_to_qmux
+                              --> qmi_qmux_tx_msg
+                                 --> qmi_qmux_if_send_to_client
+                                    --> qmi_qmux_if_rx_msg
+                        --> tmp_client_data.sys_event_rx_hdlr = qmi_service_sys_event_handler
+                           --> qmi_service_sys_event_hdlr_f = qmi_sys_event_hdlr
+                              --> sys_event_client_data->sys_event_rx_hdlr = netmgr_qmi_sys_cb
+                                 --> NETMGR_SM_transitions[] = netmgr_sm_dispatch_qmi_msg
+                                    --> netmgr_qmi_dispatch
+                                       --> vtable.dispatch = netmgr_qmi_cmd_exec
+                                          --> netmgr_wds_ind
+                                             --> netmgr_wds_pkt_srvc_status_ind	
+                                                --> netmgr_exec_put_cmd: NETMGR_WDS_CONNECTED_EV
+                                                   --> ds_cmdq_enq
+   
+
+qmi_qmux_rx_client_msg
+qmi_qmux_if_send_to_client
+
+qmi_qmux_tx_msg
+qmi_ctl_send_raw_indication
+qmi_ctl_rx_msg
+qmi_qmux_handle_raw_qmi_ctl_resp
+
+Put command:
+qmi_qmux_if_pwr_up_init_ex
+QMI_QMUX_IF_PLATFORM_CLIENT_INIT = linux_qmi_qmux_if_client_init
+linux_qmi_qmux_if_rx_msg/qmi_qmux_if_send_to_client
+qmi_qmux_if_rx_msg
+   tmp_client_data.rx_msg_hdlr
+   qmi_qmux_if_handle_sys_ind_msg
+qmi_service_sys_event_handler
+qmi_service_sys_event_hdlr_f = qmi_sys_event_hdlr
+sys_event_client_data->sys_event_rx_hdlr = netmgr_qmi_sys_cb
+NETMGR_SM_transitions[] = netmgr_sm_dispatch_qmi_msg
+netmgr_qmi_dispatch
+vtable.dispatch = netmgr_qmi_cmd_exec
+netmgr_wds_ind
+netmgr_wds_pkt_srvc_status_ind	
+   --> netmgr_exec_put_cmd: NETMGR_WDS_CONNECTED_EV
+      --> ds_cmdq_enq
+
+netmgr_main
+   --> netmgr_exec_init
+      --> ds_cmdq_init
+         --> ds_cmdthrd_init
+            --> pthread_create (create thread for cmdq on ds_cmdthrd_main)
+               --> ds_cmdq_deq
+   --> netmgr_exec_wait (wait on the cmdq queue)
+
+stm_state_machine_t
+NETMGR_SM[ NETMGR_SM_NUM_INSTANCES ] =
+   --> static const stm_state_machine_perinst_constdata_t
+       NETMGR_SM_perinst_constdata[ NETMGR_SM_NUM_INSTANCES ] =
+      --> static const stm_state_machine_constdata_t NETMGR_SM_constdata =
+         --> NETMGR_SM_transitions[ NETMGR_SM_NUM_STATES * NETMGR_SM_NUM_INPUTS ]
+
+enum
+{
+  NETMGR_STATE_DOWN,
+  NETMGR_STATE_INITED,
+  NETMGR_STATE_COMING_UP,
+  NETMGR_STATE_CONFIGURING,
+  NETMGR_STATE_RECONFIGURING,
+  NETMGR_STATE_UP,
+  NETMGR_STATE_GOING_DOWN,
+  NETMGR_STATE_GOING_DOWN_TO_COME_UP,
+};
+
+typedef enum netmgr_sm_events_e {
+  NETMGR_KIF_MSG_CMD,            /* Kernel socket interface message      */
+  NETMGR_QMI_MSG_CMD,            /* QMI library message                  */
+  NETMGR_RESET_MSG_CMD,          /* netmgr reset message                 */
+  
+  NETMGR_INITED_EV,              /* netmgr initialized event             */
+  NETMGR_MODEM_IS_EV,            /* Modem in service event               */
+  NETMGR_MODEM_OOS_EV,           /* Modem out of service event           */
+  NETMGR_WDS_CONNECTED_EV,       /* Modem interface connected            */
+  NETMGR_WDS_DISCONNECTED_EV,    /* Modem interface disconnected         */
+  NETMGR_KIF_OPENED_EV,          /* Kernel network interface up          */
+  NETMGR_KIF_CLOSED_EV,          /* Kernel network interface down        */
+  NETMGR_KIF_CONFIGURED_EV,      /* Kernel network interface configured  */
+  NETMGR_KIF_RECONFIGURED_EV,    /* Kernel network interface reconfigured*/
+  NETMGR_QOS_ACTIVATE_EV,        /* Modem QoS flow activated             */
+  NETMGR_QOS_MODIFY_EV,          /* Modem QoS flow modified              */
+  NETMGR_QOS_DELETE_EV,          /* Modem QoS flow deleted               */
+  NETMGR_QOS_SUSPEND_EV,         /* modem QoS flow suspended             */
+  NETMGR_QOS_FLOCNTRL_EV,        /* modem QoS flow control change        */
+  NETMGR_INVALID_EV              /* Internal value                       */
+} netmgr_sm_events_t;
+
+Client List:
+atfwd_daemon->main
+bridgemgr->main
+dcs_main->main
+dsi_netctrl_daemon->main
+netmgr_main->main
+qti_main->main
+
+
+
+
+1. Port changes of default mobile configure/MMS recepion on non-default SIM/Strategy of default SIM card for incoming call
+2. Port changes of error fixes for Qualcom
+
+Connectivity Team:
+savaloja turkka
+Jukka Tpaio
+Antti Haapakangas
+Call UI/WIFI UI/Operator name/Dual sim/Bluetooth
+Features: hot-swap/settings
+
+PSW:
+Contact: 
+1. Wiki page of BJ AOL team
+2. Confirm with sun xin about the call UI schedule to meet the requirement of PSW team (start to test lyra on WK17)
+3. Ask for the trace tool instructions
+4. Send the contact name of SIMATK/Dual SIM/connectivity setting to PSW
+5. SW team owns all the JAVA code while PSW team owns the C/C++ code (RIL/QCRIL/...)
+6. For WLAN/BT, confirm the boundary with BJ PSW team.
+7. Not sure about the ownership of NETD
+8. The architect in BJ team. Yang Ming/Ronan ??
+9. For errors of Qualcom, create error in Mzilla and change the key words to AOLQC if it is 100 percent sure. Otherwise, just route the error to PSW team by changing the key words to AOLPSW with the JAVA and QC traces.
+
+

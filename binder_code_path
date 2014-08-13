@@ -1,0 +1,215 @@
+Service Manager main
+   ---> binder_open
+      ---> binder_open (kernel)
+         ---> Create binder_proc and and insert it to current->file->private_data
+   ---> binder_become_context_manager BINDER_SET_CONTEXT_MGR
+      ---> binder_ioctl
+         ---> binder_get_thread (get existing thread or create new thread if nothing can be found)
+         ---> BINDER_SET_CONTEXT_MGR 
+            ---> inder_context_mgr_uid = current->cred->euid;
+            ---> binder_context_mgr_node = binder_new_node(proc, NULL, NULL); (create new binder node for service manager with ptr 0)
+   ---> binder_loop
+      ---> ioctl(bs->fd, BINDER_WRITE_READ, &bwr); (wait to read data)
+          ---> binder_ioctl
+              ---> binder_get_thread (get existing thread or create new thread if nothing can be found)
+              ---> BINDER_WRITE_READ
+                 ---> copy_from_user (copy data from user space)
+                 ---> binder_thread_write (for service manager, the write size is always 0 so that binder_thread_write is never get called)
+                 ---> binder_thread_read
+                     ---> wait_event_interruptible (wait untill there is data on wait queue)
+                 ---> copy_to_user
+      ---> binder_parse (In case there is request read from ioctl)
+         ---> BR_TRANSACTION
+            ---> binder_dump_txn
+            ---> func (call the requested function in local service)
+            ---> binder_send_reply
+            
+Service Manager startup
+main
+   ---> binder_open
+      ---> mmap
+   ---> binder_become_context_manager
+      ---> ioctl BINDER_SET_CONTEXT_MGR
+   ---> binder_loop
+      ---> ioctl BINDER_WRITE_READ
+      
+Binder kernel
+   binder_ioctl
+      ---> binder_get_thread (get existing thread or create new thread if nothing can be found)
+      ---> BINDER_SET_CONTEXT_MGR
+         ---> binder_new_node
+
+Add Service
+SurfaceFlinger (main_surfaceflinger.cpp)
+   main
+      ---> SurfaceFlinger::publishAndJoinThreadPool
+         ---> defaultServiceManager
+            ---> ProcessState::self()
+               ---> open_driver
+            ---> ProcessState::getContextObject
+               ---> ProcessState::getStrongProxyForHandle
+                  ---> new BpBinder(handle);
+         ---> new SurfaceFlinger()
+         ---> sm->addService (register service to service manager)
+            ---> BpServiceManager.addService
+               ---> remote()->transact = BpBinder::transact
+                  ---> IPCThreadState::self()->transact(BC_TRANSACTION)
+                     ---> IPCThreadState.writeTransactionData
+                        ---> mOut.writeInt32
+                     ---> IPCThreadState.waitForResponse
+                        ---> IPCThreadState.talkWithDriver
+                           ---> ioctl(BINDER_WRITE_READ)
+    
+   Binder kernel
+      ---> binder_ioctl
+         ---> binder_get_thread (get existing thread or create new thread if nothing can be found)
+         ---> BINDER_WRITE_READ
+            ---> copy_from_user (copy data from user space)
+            ---> binder_thread_write
+               ---> BC_TRANSACTION
+                  ---> binder_transaction BINDER_TYPE_BINDER
+                      ---> target_node = binder_context_mgr_node (requesting service manager)
+                      ---> binder_get_node (get local service)
+                      ---> binder_new_node (create node for local service and insert it to proc->nodes tree)
+                      ---> binder_get_ref_for_node (Create ref for node and insert it to proc->refs_by_node of service manager)
+
+   Servie Manager
+    binder_loop
+       ---> ioctl
+          ---> binder_parse BR_TRANSACTION
+             ---> svcmgr_handler SVC_MGR_ADD_SERVICE
+                ---> bio_get_string16 (get service name)
+                ---> bio_get_ref
+                ---> do_add_service
+                   ---> find_svc (find particular service from global list svclist)
+                   ---> if found, svcinfo_death
+                   ---> if not found, insert it to svclist
+                   ---> binder_acquire
+                   ---> binder_link_to_death
+             ---> binder_send_reply
+                ---> binder_write
+             
+
+Get Service
+  Client
+    ---> defaultServiceManager
+       ---> BpServiceManager.getService
+          ---> BpServiceManager.checkService
+             ---> remote()->transact = BpBinder.transact
+                ---> IPCThreadState::self()->transact
+                   ---> IPCThreadState.writeTransactionData BC_TRANSACTION
+                      ---> mOut.writeInt32
+                   ---> IPCThreadState.waitForResponse
+                      ---> IPCThreadState.talkWithDriver
+                         ---> ioctl(BINDER_WRITE_READ)
+
+   Binder kernel
+      ---> binder_ioctl
+         ---> binder_get_thread (get existing thread or create new thread if nothing can be found)
+         ---> BINDER_WRITE_READ
+            ---> copy_from_user (copy data from user space)
+            ---> binder_thread_write
+               ---> BC_TRANSACTION
+                  ---> binder_transaction BINDER_TYPE_HANDLE
+                      ---> target_node = binder_context_mgr_node (requesting service manager to get service)
+                      ---> binder_get_ref (get ref of service manager)
+                      ---> list_add_tail (add request to the queue of service manager)
+
+   Servie Manager
+    binder_loop
+       ---> ioctl BINDER_WRITE_READ
+          ---> binder_parse BR_TRANSACTION
+             ---> svcmgr_handler SVC_MGR_GET_SERVICE
+                ---> bio_get_string16 (get service name)
+                ---> do_find_service
+                ---> bio_put_ref  BINDER_TYPE_HANDLE
+             ---> binder_send_reply
+                ---> binder_write
+                   ---> ioctl
+
+   Binder kernel
+      ---> binder_ioctl
+         ---> binder_get_thread (get existing thread or create new thread if nothing can be found)
+         ---> BINDER_WRITE_READ
+            ---> copy_from_user (copy data from user space)
+            ---> binder_thread_write
+               ---> BC_TRANSACTION
+                  ---> binder_transaction BINDER_TYPE_HANDLE
+                      ---> (ref->node->proc == target_proc is not true) binder_get_ref_for_node (create ref for the node of requested service. target_proc is the proc of client)
+                      ---> fp->handle = new_ref->desc; (update the handle value)
+                      ---> list_add_tail (add request to the queue of client)
+
+  Client
+                      ---> BR_REPLY: mIn.read
+                   ---> IPCThreadState.waitForResponse
+                ---> IPCThreadState::transact
+             ---> remote()->transact = BpBinder.transact
+          ---> reply.readStrongBinder
+             ---> unflatten_binder(ProcessState::self(), *this, &val);
+                ---> BINDER_TYPE_HANDLE: ProcessState->getWeakProxyForHandle
+                   ---> new BpBinder(handle)
+                ---> finish_unflatten_binder
+       ---> BpServiceManager.checkService
+    ---> interface_cast<IMediaPlayerService>(binder)
+       ---> IMediaPlayerService.asInterface
+          ---> obj->queryLocalInterface
+          ---> new BpMediaPlayerService(obj);
+
+
+
+SurfaceFlinger (main_sufaceflinger.cpp)
+   main
+      ---> SurfaceFlinger::publishAndJoinThreadPool
+         ---> sm->addService (register service to service manager)
+            ---> BpServiceManager.addService
+               ---> remote()->transact = BpBinder::transact
+                  ---> IPCThreadState::self()->transact
+                     ---> IPCThreadState.writeTransactionData
+                        ---> mOut.writeInt32
+         ---> ProcessState::self()->startThreadPool()
+            ---> new ProcessState
+               ---> open_driver (open /dev/binder)
+               ---> mmap (map memory in kernel)
+               ---> spawnPooledThread
+                  ---> new PoolThread(isMain)
+         ---> IPCThreadState::self()->joinThreadPool()
+             ---> talkWithDriver (wait for data from binder)
+                ---> readInt32 (read data from binder)
+                ---> executeCommand
+                   ---> BR_TRANSACTION: sp<BBinder> b((BBinder*)tr.cookie) (find the BBinder object of the native service)
+                   ---> b->transact (handle the request) = BBinder.transact
+                      ---> BnSurfaceComposer.onTransact (exeute command according to the request code)
+      ---> ProcessState::self()->setThreadPoolMaxThreadCount                          
+                          
+                          
+BpSurfaceComposer.createConnection
+   ---> remote()->transact = BpBinder::transact
+      ---> IPCThreadState::self()->transact                    
+         ---> IPCThreadState.writeTransactionData
+            ---> mOut.writeInt32
+         ---> IPCThreadState.waitForResponse
+            ---> IPCThreadState.talkWithDriver
+               ---> ioctl(BINDER_WRITE_READ)
+                    
+IPCThreadState::joinThreadPool
+   ---> IPCThreadState::talkWithDriver
+      ---> ioctl
+   ---> IPCThreadState::executeCommand
+      ---> b->transact = BBinder::transact
+         ---> BnSurfaceComposer::onTransact
+            ---> SurfaceFlinger::createConnection
+            ---> reply->writeStrongBinder
+   ---> IPCThreadState::sendReply
+
+binder_ioctl
+   ---> binder_get_thread
+   ---> BINDER_WRITE_READ
+      ---> copy_from_user
+      ---> binder_thread_write
+         ---> BC_TRANSACTION
+            ---> binder_transaction BINDER_TYPE_WEAK_BINDER
+                ---> binder_get_node
+                ---> binder_new_node
+                ---> binder_get_ref_for_node
+                ---> list_add_tail      
+

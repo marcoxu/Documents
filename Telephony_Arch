@@ -1,0 +1,917 @@
+RILD:
+main
+   --> RIL_setRilSocketName (for specified client 'rild0' or 'rild1')
+   --> RIL_startEventLoop
+      --> pthread_create for eventLoop
+         --> ril_event_init
+         --> ril_event_set
+         --> rilEventAddWakeup
+            --> ril_event_add
+            --> triggerEvLoop (write on s_fdWakeupWrite)
+         --> ril_event_loop (wait on pipe s_fdWakeupRead for reading)
+   --> rilInit = RIL_Init
+      --> qcril_event_init
+      --> qcril_init
+      --> qcril_event_start
+      --> qmi_ril_initiate_bootup
+   --> RIL_register
+      --> android_get_control_socket
+      --> listen (monitor socket 'rild0' or 'rild1')
+      --> ril_event_set
+      --> rilEventAddWakeup
+      --> processCommandsCallback
+         --> processCommandBuffer
+            --> pRI->pCI->dispatchFunction (query in ril_commands.h)
+               --> for RIL_REQUEST_SETUP_DATA_CALL: dispatchDataCall
+                  --> dispatchStrings
+                     --> s_callbacks.onRequest = onRequest_rid0
+                        --> onRequest
+                           --> qcril_hash_table_lookup
+                           --> qcril_dispatch_event
+                              --> (entry_ptr->handler)(params_ptr, &ret) ==> qcril_event_table
+                                 --> RIL_REQUEST_SETUP_DATA_CALL: qcril_data_request_setup_data_call
+                                    --> dsi_start_data_call (qmi implementation)
+                                       --> dsi_mni_vtbl.mni_start_f(i, st_hndl)= dsi_mni_start
+                                          --> qdi_wds_start_nw_if (qdi_wds_async_cb_hdlr)
+                                             --> qmi_wds_start_nw_if (qdi_wds_async_cb_hdlr)
+                                                --> qmi_service_send_msg_async (qmi_wds_srvc_async_cb)
+                                                   --> qmi_service_send_msg
+                                                      --> qmi_qmux_if_send_qmi_msg
+                                                         --> qmi_qmux_if_send_to_qmux
+                                                            --> linux_qmi_qmux_if_client_tx_msg
+                                                               --> send
+
+                                 
+                                 
+                                    --> dsi_req_start_data_call (fusion implementation)
+                                       --> (hndl))->start_data_call( hndl ) = start_data_call
+                                          --> dsnet_start = dss_pppopen
+                                             --> dcm_net_open
+                                                --> dsc_dcm_nh_set_iface
+                                                --> dsc_dcm_if_add_nh
+                                                --> (*(iface->if_op_tbl.if_up_cmd))(iface->if_id, iface->call_hdl) = dsc_pricall_if_up_cmd
+                                                   --> dsc_cmdq_enq (DSC_CALL_IFACE_UP_CMD)
+
+setup Data call:
+bringUp
+   --> sendMessage EVENT_CONNECT
+   --> onConnect
+      --> mPhone.mCi.setupDataCall
+         --> send
+
+qcril Receive data from qmuxd
+linux_qmi_qmux_if_rx_msg
+   --> qmi_qmux_if_rx_msg
+      --> tmp_client_data.rx_msg_hdlr
+         --> qmi_service_receive_msg_hdlr
+            --> qmi_service_process_all_rx_indications
+               --> qmi_service_process_rx_indication
+                  --> func_ptr =  srvc->user_ind_msg_hdlr = qcril_qmi_voice_unsol_ind_cb
+                     --> qcril_event_queue
+                        --> qcril_event_add_to_list (qcril_event)
+            --> qmi_service_complete_txn
+               --> async.service_async_cb_fn = qmi_wds_srvc_async_cb
+                  --> qdi_wds_async_cb_hdlr
+                     --> cmd->ds_cmd.execute_f = qdi_process_wds_async_cb;
+                     --> ds_cmdq_enq (qdi_cmdq)
+
+qcril_event_main
+   --> qcril_process_event
+      --> qcril_hash_table_lookup
+      --> qcril_dispatch_event
+         --> QCRIL_EVT_CM_CALL_SETUP_IND: qcril_cm_callsvc_event_setup_ind
+            --> qcril_send_unsol_response
+               --> qcril_send_unsol_response_epilog
+                  --> qcril_response_api[ param_ptr->instance_id ]->OnUnsolicitedResponse = RIL_onUnsolicitedResponse
+                     --> sendResponse
+                        --> sendResponseRaw
+                           --> blockingWrite
+            --> qcril_cm_clist_new
+               --> qcril_cm_clist_new_all
+
+RILReceiver
+   --> processResponse
+      --> processUnsolicited
+         --> responseCallRing
+         --> mRingRegistrant.notifyRegistrant
+            --> internalNotifyRegistrant (EVENT_CALL_RING)
+      --> processSolicited
+
+PhoneBase
+   --> handleMessage
+      --> notifyIncomingRing
+         --> mIncomingRingRegistrants.notifyRegistrants EVENT_INCOMING_RING
+            --> CallManager: handleMessage
+               --> mIncomingRingRegistrants.notifyRegistrants PHONE_INCOMING_RING
+                  --> CallNotifier: handleMessage
+                     --> mRinger.ring
+                        --> mVibratorThread.start
+                        --> mRingHandler.sendEmptyMessageDelayed (PLAY_RING_ONCE)
+                           --> handleMessage
+                              --> RingtoneManager.getRingtone
+                                 --> r.play
+                                    --> mLocalPlayer.start
+                                    --> mRemotePlayer.play
+                                       --> mRingtonePlayer.play = IRingtonePlayer.Stub.play
+                                          --> client.mRingtone.play
+                                             --> RingTone.play
+                                                --> mLocalPlayer.start = MediaPlayer.start
+                                                   --> MediaPlayer._start
+                                                      --> android_media_MediaPlayer_start
+                                                         --> mp->start() = MediaPlayer::start
+                                                            --> mPlayer->start() = MediaPlayerService::Client::start
+                                                               --> BnMediaPlayer.start
+                                                                  --> p->start = NuPlayerDriver::start
+                                                                     --> mPlayer->start() = NuPlayer::start
+                                                                        --> (new AMessage(kWhatStart, id()))->post()
+                                                                           --> ACodec::LoadedState::onStart
+                                                                              --> mCodec->mOMX->sendCommand (OMX_CommandStateSet)
+                                                         --> process_media_player_call
+      
+RIL_Init
+   --> qcril_data_init (qmi implementation)
+      --> dsi_init(DSI_MODE_GENERAL);
+         --> dsi_init_internal
+            --> dsi_mni_vtbl.mni_init_f() = dsi_mni_init
+               --> qdi_init
+                  --> ds_cmdq_init
+                     --> ds_cmdthrd_init
+                        --> start thread on ds_cmdthrd_main
+                           --> ds_cmdq_deq
+            --> dsi_netctrl_cb_init
+               --> ds_cmdq_init (dsi_netctrl_cb_cmdq)
+                  --> ds_cmdthrd_init
+                     --> start thread on ds_cmdthrd_main
+         --> dsi_init_netmgr_general
+            --> netmgr_client_register (dsi_netmgr_cb)
+               --> netmgr_client_alloc
+               --> netmgr_client_start_listener
+               --> netmgr_nl_listener_init
+                  --> netmgr_nl_socklthrd_init
+                  --> netmgr_nl_open_sock
+                  --> netmgr_nl_socklthrd_addfd
+                  --> netmgr_nl_socklthrd_start
+                     --> start thread on netmgr_nl_socklthrd_main for netlink socket
+   --> qcril_event_init
+      --> pthread_create (start thread for qcril_event_main)
+
+RIL_Init
+   --> qcril_init
+      --> qcril_data_init (fusion implementation)
+         --> dsi_init                              
+            --> dsc_main
+               --> dsc_cmdthrd_init
+                  --> start thread for dsc_cmdthrd_main
+                     --> dsc_cmdq_deq
+                     --> (*(cmd->execute_f))(cmd, cmd->data); = dsc_call_cmd_exec
+                        --> dsc_pricall_connect_req (DSC_CALL_IFACE_UP_CMD)
+                           --> dsc_wds_start_interface_req
+                              --> qmi_wds_start_nw_if
+                                 --> qmi_service_send_msg_async
+                                    --> qmi_service_send_msg
+                                       --> qmi_qmux_if_send_qmi_msg
+                                          --> qmi_qmux_if_send_to_qmux
+                                             --> linux_qmi_qmux_if_client_tx_msg
+                                                --> send
+                           --> dsc_pricall_set_state
+               --> dsc_qmi_init
+                  --> dsc_qmi_cmd_init
+                     --> cmdp->cmd.execute_f = dsc_qmi_cmd_exec;
+                        --> dsc_wds_ind
+                           --> dsc_wds_event_report_ind
+   --> qmi_ril_initiate_bootup
+
+qmi_ril_core_init
+qcril_qmi_client_init
+qmi_init
+qmi_service_pwr_up_init
+qmi_qmux_if_pwr_up_init
+qmi_qmux_if_pwr_up_init_ex
+QMI_QMUX_IF_PLATFORM_CLIENT_INIT = linux_qmi_qmux_if_client_init
+linux_qmi_qmux_if_connect
+qmi_service_receive_msg_hdlr   
+   --> register client to qmi qmi_qmux_if_client_data_list
+
+linux_qmi_qmux_if_server.c
+main
+   --> qmi_qmux_open_connection (open connnection for all connect_id in linux_qmi_conn_id_enablement_array)
+      --> linux_qmi_qmux_io_open_conn
+         --> linux_qmi_qmux_io_open_conn_proxy (create socket for specified conn_id)
+         --> start thread on linux_qmi_qmux_io_rx_msg
+   --> linux_qmi_qmux_if_server_init_listeners
+      --> linux_qmi_qmux_if_get_listener_socket
+   --> linux_qmi_qmux_if_server_process_client_msg
+      --> qmi_qmux_tx_msg
+         --> qmi_qmux_tx_to_modem
+            --> QMI_QMUX_IO_PLATFORM_SEND_QMI_MSG = linux_qmi_qmux_io_send_qmi_msg
+               --> write
+      
+      --> linux_qmi_qmux_io_rx_msg
+         qmi_qmux_pwr_up_init
+            --> linux_qmi_qmux_io_pwr_up_init
+               --> inux_qmi_qmux_io_rx_cb = qmi_qmux_rx_msg
+                  --> qmi_qmux_broadcast_sys_ind_to_all_clients
+                     --> qmi_qmux_if_send_to_client
+                        --> linux_qmi_qmux_if_server_tx_msg (send via socket)
+                
+                    
+atfwd_daemon->main/bridgemgr->main/dcs_main->main/dsi_netctrl_daemon->main/netmgr_main->main/qti_main->main
+               qmi_dev_connection_init/qmi_client_init/
+                  qmi_service_connection_init
+                     qmi_qmux_if_open_connection
+   netmgr_main
+      netmgr_qmi_init        
+         netmgr_qmi_driver_init      
+            qmi_init
+               qmi_service_pwr_up_init
+                  qti_rmnet_qmux_open/qmi_qmux_if_pwr_up_init
+                     qmi_qmux_if_pwr_up_init_ex
+                        linux_qmi_qmux_if_client_init
+                           --> linux_qmi_qmux_if_rx_msg (recv on socket)
+                              --> qmi_qmux_if_rx_msg
+                                 --> qmi_qmux_if_handle_sys_ind_msg
+                                    --> tmp_client_data.rx_msg_hdlr = qmi_service_receive_msg_hdlr
+                                       --> qmi_service_process_all_rx_indications               
+                                          --> qmi_service_process_rx_indication
+                                             --> func_ptr =  srvc->user_ind_msg_hdlr = netmgr_qmi_wds_ind
+                                                --> netmgr_exec_put_cmd
+                                                   --> ds_cmdq_enq (NETMGR_QMI_MSG_CMD)
+            netmgr_qmi_get_conn_id_for_link
+            qmi_connection_init = qmi_dev_connection_init
+               QMI_PLATFORM_DEV_NAME_TO_CONN_ID = qmi_linux_get_conn_id_by_name
+               qmi_service_connection_init
+                  qmi_qmux_if_open_connection
+                     qmi_qmux_open_connection
+                        QMI_QMUX_IO_PLATFORM_OPEN_CONN = linux_qmi_qmux_io_open_conn
+                           start thread on linux_qmi_qmux_io_rx_msg
+            netmgr_qmi_service_init
+
+netmgr_qmi_cfg initialized by netmgr_qmi_init with netmgr_ctl_port_array
+netmgr_qmi_driver_init
+   netmgr_qmi_service_init
+      netmgr_qmi_get_conn_id_for_link
+
+netmgr_qmi_driver_init
+   netmgr_qmi_get_conn_id_for_link
+
+netmgr_main
+   --> netmgr_exec_init
+      --> ds_cmdq_init
+         --> ds_cmdthrd_init
+            --> pthread_create (create thread for cmdq on ds_cmdthrd_main)
+               --> ds_cmdq_deq
+               --> (*(cmd->execute_f))(cmd, cmd->data);  = netmgr_exec_cmd_process
+                  --> stm_instance_process_input
+                     --> stm_get_instance
+                     --> stm_process_input
+                        --> stm_process_input
+                           --> stm_call_state_entry
+                              --> sm_cdata->state_map_array[sm->current_state].entry_fn = NETMGR_SM[]
+                           --> new_state = trans_fn(sm,payload);
+
+netmgr_sm_state_up_entry
+netmgr_kif_send_event_msg
+netmgr_platform_vtable.kif.send_event( event_info ) = netmgr_kif_send_event
+   --> netmgr_nl_send_msg
+      --> sendmsg (over netmgr_kif_sk_grp)
+
+DSI_netctrl_daemon.c
+main
+   --> dsi_init
+      --> dsi_init_netmgr_general
+         --> netmgr_client_register (dsi_netmgr_cb)
+            --> netmgr_client_alloc
+            --> netmgr_client_start_listener
+               --> netmgr_nl_listener_init (create netlink for NETMGR_NL_TYPE)
+                  --> netmgr_nl_socklthrd_init
+                  --> netmgr_nl_open_sock
+                  --> netmgr_nl_socklthrd_addfd
+                  --> netmgr_nl_socklthrd_start
+                     --> start thread on netmgr_nl_socklthrd_main for netlink socket
+
+start thread on netmgr_nl_socklthrd_main
+(* (fdmap + i)->read_f)((fdmap + i)->fd) = netmgr_client_recv_nl_msg
+netmgr_client_notify
+dsi_qmi_wds_cmd_cb/dsi_qmi_wds_ind_cb/dsi_qmi_sys_cb/dsi_qmi_qos_ind_cb/dsi_netmgr_cb
+dsi_netctrl_cb_cmd_exec
+   --> dsi_process_netmgr_ev
+   
+   
+dsi_mni_start
+   --> qdi_wds_start_nw_if
+      --> register call_info->start_if_txn.cb_hdlr = dsi_qmi_wds_cmd_cb
+
+onRequest
+   --> qcril_hash_table_lookup
+   --> qcril_dispatch_event
+      --> (entry_ptr->handler)(params_ptr, &ret); = RIL_REQUEST_SETUP_DATA_CALL: qcril_data_request_setup_data_call
+dsi_start_data_call
+   --> dsi_mni_look_up
+dsi_mni_vtbl.mni_start_f(i, st_hndl); = dsi_mni_start
+   --> qdi_wds_start_nw_if (qdi_wds_async_cb_hdlr)
+      --> qmi_wds_start_nw_if (qdi_wds_async_cb_hdlr)
+         --> qmi_service_send_msg_async (qmi_wds_srvc_async_cb, QMI_WDS_START_NW_IF_MSG_ID)
+            --> qmi_service_send_msg
+               --> qmi_qmux_if_send_qmi_msg
+                  --> qmi_qmux_if_send_to_qmux
+qdi_wds_async_cb_hdlr
+   --> cmd->ds_cmd.execute_f = qdi_process_wds_async_cb
+   --> ds_cmdq_enq
+   
+
+DSI_netctrl_daemon.c
+main
+dsi_init
+dsi_init_internal
+dsi_mni_vtbl.mni_init_f() = dsi_mni_init
+   --> qdi_init
+      --> ds_cmdq_init
+         --> ds_cmdthrd_init
+            --> start thread on ds_cmdthrd_main
+               --> ds_cmdq_deq
+               --> (*(cmd->execute_f))(cmd, cmd->data); = qdi_process_wds_async_cb
+                  --> qdi_cb_hdlr
+                     --> txn->cb_hdlr
+
+
+netmgr_qmi_wds_service_init
+   --> qmi_wds_srvc_init_client (netmgr_qmi_wds_ind)
+      --> qmi_service_init
+         --> qmi_alloc_srvc_data
+            --> QMI_SLL_ADD(srvc,qmi_srvc_client_info_table [conn_id][book_keep_srvc_id])
+      --> QMI_SLL_ADD (client_data, qmi_wds_client_data_list)
+      
+netmgr_main->main
+linux_qmi_qmux_if_rx_msg
+   --> qmi_qmux_if_rx_msg
+      --> tmp_client_data.rx_msg_hdlr
+         --> qmi_service_receive_msg_hdlr
+            --> qmi_service_process_all_rx_indications
+               --> qmi_service_process_rx_indication
+                  --> func_ptr =  srvc->user_ind_msg_hdlr = netmgr_qmi_wds_ind
+                     netmgr_qmi_wds_ind (NETMGR_QMI_MSG_CMD)
+                        netmgr_sm_dispatch_qmi_msg
+                           netmgr_qmi_dispatch
+                              netmgr_qmi_cmd_exec        
+                                 netmgr_wds_ind             
+                                    netmgr_wds_pkt_srvc_status_ind
+                                       --> netmgr_exec_put_cmd (NETMGR_WDS_CONNECTED_EV)
+                                          --> ds_cmdq_enq (netmgr_exec_state_info)
+
+netmgr statemachine
+netmgr_main
+   --> netmgr_exec_init
+      --> stm_instance_activate
+         --> stm_activate
+            --> sm->current_state = sm_cdata->initial_state = NETMGR_STATE_DOWN
+   --> netmgr_main_sm_inited
+      --> netmgr_exec_put_cmd (NETMGR_INITED_EV)
+
+linux_qmi_qmux_if_rx_msg
+   --> qmi_qmux_if_rx_msg
+      --> tmp_client_data.rx_msg_hdlr = qmi_service_receive_msg_hdlr
+         --> qmi_service_process_all_rx_indications
+            --> qmi_service_process_rx_indication
+               --> srvc->user_ind_msg_hdlr = netmgr_qmi_wds_ind
+                  --> netmgr_wds_pkt_srvc_status_ind
+                     --> netmgr_exec_put_cmd (NETMGR_QMI_WDS_IND_CMD) netmgr_exec_state_info
+
+netmgr_main->main
+linux_qmi_qmux_if_rx_msg
+   --> qmi_qmux_if_rx_msg
+      --> tmp_client_data.rx_msg_hdlr
+         --> qmi_service_receive_msg_hdlr
+            --> qmi_service_process_all_rx_indications
+               --> qmi_service_process_rx_indication
+                  --> func_ptr =  srvc->user_ind_msg_hdlr = netmgr_qmi_wds_ind
+                     netmgr_qmi_wds_ind (NETMGR_QMI_MSG_CMD)
+                        netmgr_sm_dispatch_qmi_msg
+                           netmgr_qmi_dispatch
+                              netmgr_qmi_cmd_exec        
+                                 netmgr_wds_ind             
+                                    netmgr_wds_pkt_srvc_status_ind
+                                       --> netmgr_exec_put_cmd (NETMGR_WDS_CONNECTED_EV)
+                                          --> ds_cmdq_enq (netmgr_exec_state_info)
+
+ds_cmdthrd_main
+   --> ds_cmdq_deq
+   --> (*(cmd->execute_f))(cmd, cmd->data);  = netmgr_exec_cmd_process
+      --> stm_instance_process_input
+         --> stm_process_input
+            --> trans_fn = netmgr_sm_modem_connected [NETMGR_STATE_INITED*NETMGR_WDS_CONNECTED_EV]
+               --> netmgr_kif_iface_open
+                  --> netmgr_platform_vtable.kif.iface_open = netmgr_kif_open
+                     --> netmgr_kif_set_state(link, NETMGR_KIF_OPENING);
+                     --> netmgr_kif_open_req
+                        --> netmgr_kif_ifioctl_set_flags
+                           --> ioctl (to kernel)
+               --> next_state = NETMGR_STATE_COMING_UP
+            --> stm_call_state_exit
+            --> stm_call_state_entry
+
+Nelink_route message received which indicating if configure done:
+netmgr_kif_nl_recv_routing_msg (NETMGR_KIF_MSG_CMD)
+   --> netmgr_exec_put_cmd (netmgr_exec_state_info)
+   
+ds_cmdq_init
+   --> ds_cmdthrd_init
+      --> start thread on ds_cmdthrd_main
+         --> ds_cmdq_deq
+            --> (*(cmd->execute_f))(cmd, cmd->data) = netmgr_exec_cmd_process
+               --> stm_instance_process_input
+                  --> stm_process_input
+                     --> trans_fn = netmgr_sm_dispatch_kif_msg [NETMGR_STATE_COMING_UP*NETMGR_KIF_MSG_CMD]
+                        --> netmgr_kif_dispatch
+                           --> netmgr_kif_nl_msg_recv_cmd_exec
+                              --> RTM_NEWLINK: netmgr_kif_nl_recv_link_msg
+                                 --> netmgr_kif_open_cnf
+                                    --> netmgr_exec_get_cmd (NETMGR_KIF_OPENED_EV)
+                                       --> netmgr_exec_put_cmd
+                              --> RTM_NEWADDR: netmgr_kif_nl_recv_addr_msg
+
+ds_cmdthrd_main
+   --> ds_cmdq_deq
+   --> (*(cmd->execute_f))(cmd, cmd->data);  = netmgr_exec_cmd_process
+     --> stm_instance_process_input
+        --> stm_process_input
+          --> trans_fn = netmgr_sm_kif_opened [NETMGR_STATE_COMING_UP*NETMGR_KIF_OPENED_EV]
+             --> netmgr_kif_iface_configure
+                --> netmgr_platform_vtable.kif.iface_configure = netmgr_kif_configure
+                   --> netmgr_kif_cfg_req
+                      --> For reverse rmnet, netmgr_kif_rev_rmnet_cfg_req
+                      --> ioctl (SIOCSIFADDR, SIOCSIFNETMASK)
+             --> next_state = NETMGR_STATE_CONFIGURING
+
+Nelink_route message received which indicating route configure done:
+netmgr_kif_nl_recv_routing_msg (NETMGR_KIF_MSG_CMD)
+   --> netmgr_exec_put_cmd (netmgr_exec_state_info)
+
+ds_cmdq_init
+   --> ds_cmdthrd_init
+      --> start thread on ds_cmdthrd_main
+         --> ds_cmdq_deq
+            --> (*(cmd->execute_f))(cmd, cmd->data) = netmgr_exec_cmd_process
+               --> stm_instance_process_input
+                  --> stm_process_input
+                     --> trans_fn = netmgr_sm_dispatch_kif_msg [NETMGR_STATE_CONFIGURING*NETMGR_KIF_MSG_CMD]
+                        --> netmgr_kif_dispatch
+                           --> netmgr_kif_nl_msg_recv_cmd_exec
+                              --> RTM_NEWADDR: netmgr_kif_nl_recv_addr_msg
+                                 --> netmgr_kif_cfg_cnf
+                                    --> netmgr_kif_set_state( link, NETMGR_KIF_OPEN )
+                                    --> event = NETMGR_KIF_CONFIGURED_EV
+                                    --> netmgr_exec_put_cmd (NETMGR_KIF_CONFIGURED_EV)
+                                 --> netmgr_set_dns_routes
+
+ds_cmdthrd_main
+   --> ds_cmdq_deq
+   --> (*(cmd->execute_f))(cmd, cmd->data);  = netmgr_exec_cmd_process
+     --> stm_instance_process_input
+        --> stm_process_input
+          --> trans_fn = netmgr_sm_kif_configured [NETMGR_STATE_CONFIGURING*NETMGR_KIF_CONFIGURED_EV]
+             --> next_state = NETMGR_STATE_UP
+          --> stm_call_state_entry
+             --> netmgr_sm_state_up_entry
+                --> netmgr_kif_send_event_msg (NET_PLATFORM_UP_EV, send to netmgr clients to notify connection is up)
+                   --> netmgr_kif_send_event nlh->nlmsg_type = NETMGR_NL_EVENT
+                      --> netmgr_nl_send_msg
+
+On netmgr client
+netmgr_client_recv_nl_msg
+   --> netmgr_nl_recv_msg
+   --> netmgr_client_notify
+      --> netmgr_client_state.client_info[index].cb_f = dsi_netmgr_cb cmd_buf->cmd_data.data_union.netmgr.event = NET_PLATFORM_UP_EV, cmd_buf->cmd_data.type = DSI_NETCTRL_CB_CMD_NETMGR
+         --> cmd_buf->cmd.execute_f = dsi_netctrl_cb_cmd_exec
+         --> ds_cmdq_enq (dsi_netctrl_cb_cmdq) type: DSI_NETCTRL_CB_CMD_NETMGR
+         
+dsi_netctrl_cb_cmd_exec
+   --> dsi_process_netmgr_ev DSI_EVT_NET_IS_CONN
+      --> dsi_netmgr_post_event
+         --> dsi_notify_users
+            --> st->net_ev_cb = qcril_data_net_cb evt->evt = DSI_EVT_NET_IS_CONN
+               --> qcril_data_post_dsi_netctrl_event evt->evt = DSI_EVT_NET_IS_CONN event_id = QCRIL_EVT_DATA_EVENT_CALLBACK
+                  --> qcril_event_queue
+                     --> qcril_event_add_to_list (qcril_event)
+         --> dsi_detach_dsi_iface
+         
+qcril_event_main
+   --> qcril_process_event
+      --> qcril_hash_table_lookup
+      --> qcril_dispatch_event
+         --> (entry_ptr->handler)(params_ptr, &ret) = qcril_data_event_hdlr
+            --> qcril_data_validate_call_technology
+            --> dsi_get_device_name
+            --> qmi_wds_srvc_init_client
+            --> qcril_data_util_fill_call_params
+            --> qcril_data_util_update_call_state
+            --> qcril_data_util_create_setup_rsp
+            --> qcril_data_client_notify (QCRIL_DATA_EVT_CALL_CONNECTED)
+               --> qcril_data_client_info.tbl[i].cb_f = qcril_qmi_nas_data_control_cb
+                  --> qcril_setup_timed_callback
+                     --> qmi_ril_nw_reg_data_reg_snapshot_validate_after_data_call_connect_handler
+                        --> qcril_default_unsol_resp_params (RIL_UNSOL_RESPONSE_NETWORK_STATE_CHANGED)
+                        --> qcril_send_unsol_response
+                           --> qcril_send_unsol_response_epilog
+            --> qcril_data_unsol_call_list_changed
+               --> qcril_default_unsol_resp_params (RIL_UNSOL_DATA_CALL_LIST_CHANGED)
+                  --> qcril_send_unsol_response
+                     --> qcril_send_unsol_response_epilog
+                        --> qcril_response_api[ param_ptr->instance_id ]->OnUnsolicitedResponse = RIL_onUnsolicitedResponse
+                           --> sendResponse
+                              --> sendResponseRaw
+                                 --> blockingWrite
+
+RILReceiver
+   --> processResponse
+      --> processUnsolicited RIL_UNSOL_RESPONSE_VOICE_NETWORK_STATE_CHANGED
+         --> mVoiceNetworkStateRegistrants.notifyRegistrants (EVENT_NETWORK_STATE_CHANGED)
+            --> pollState
+               --> getDataRegistrationState
+                  --> send (RIL_REQUEST_DATA_REGISTRATION_STATE)
+                  
+                  --> with response
+                    --> handlePollStateResult
+                       --> pollStateDone
+                          --> mAttachedRegistrants.notifyRegistrants()
+                          --> mPhone.notifyDataConnection(null)
+                             --> mNotifier.notifyDataConnection = MSimDefaultPhoneNotifier
+                                --> doNotifyDataConnection
+                                   --> mRegistry.notifyDataConnection
+                                   --> mMSimRegistry.notifyDataConnection
+                                      --> r.callback.onDataConnectionStateChanged
+                                      --> broadcastDataConnectionStateChanged (ACTION_ANY_DATA_CONNECTION_STATE_CHANGED)
+                                      --> MobileDataStateReceiver.onReceive
+                                         --> setDetailedState
+                                            --> msg.sendToTarget (EVENT_STATE_CHANGED)
+                                            
+                                            --> QcConnectivityService.ConnectivityServiceHSM.processMessage
+                                               --> sendMessageAtFrontOfQueue (HSM_HANDLE_CONNECT)
+                                               
+                                               --> handleConnect
+                                                  --> handleConnectivityChange
+                                                     --> updateRoutes
+                                                        --> QcConnectivityService.this.addRoute
+                                                           --> modifyRoute
+                                                              --> mAddedRoutes.add
+                                                              --> mNetd.addRoute
+      --> processSolicited
+         --> responseSetupDataCall
+           --> rr.mResult.sendToTarget() EVENT_SETUP_DATA_CONNECTION_DONE
+              --> DcActivatingState.processMessage
+                 --> onSetupConnectionCompleted
+                    --> updateLinkProperty
+                 --> transitionTo
+
+ds_cmdthrd_main
+   --> ds_cmdq_deq
+   --> (*(cmd->execute_f))(cmd, cmd->data);  = dsi_netctrl_cb_cmd_exec
+      --> dsi_process_wds_ind/dsi_process_async_wds_rsp/dsi_process_qos_ind/dsi_process_qmi_sys_ind/dsi_process_netmgr_ev
+         --> dsi_process_start_nw_async_rsp
+            --> st->net_ev_cb = qcril_data_net_cb
+            --> qcril_event_queue
+               --> qcril_event_add_to_list
+         --> dsi_process_wds_ind
+            --> dsi_handle_pkt_srvc_ind
+
+qcril_event_main
+   --> qcril_process_event
+      --> qcril_hash_table_lookup
+      --> qcril_dispatch_event
+
+Netmgr
+netmgr_kif_nl_post_addr_msg/netmgr_sm_state_inited_entry/netmgr_sm_state_up_entry/netmgr_sm_qos_activate/netmgr_sm_qos_modify
+netmgr_sm_state_up_entry event_info->event = NET_PLATFORM_UP_EV
+netmgr_kif_send_event nlh->nlmsg_type = NETMGR_NL_EVENT
+   --> netmgr_nl_send_msg
+   
+On netmgr client
+netmgr_client_recv_nl_msg
+   --> netmgr_nl_recv_msg
+   --> netmgr_client_notify
+      --> netmgr_client_state.client_info[index].cb_f = dsi_netmgr_cb cmd_buf->cmd_data.data_union.netmgr.event = NET_PLATFORM_UP_EV, cmd_buf->cmd_data.type = DSI_NETCTRL_CB_CMD_NETMGR
+         --> cmd_buf->cmd.execute_f = dsi_netctrl_cb_cmd_exec
+         --> ds_cmdq_enq (dsi_netctrl_cb_cmdq) type: DSI_NETCTRL_CB_CMD_NETMGR
+         
+dsi_netctrl_cb_cmd_exec
+   --> dsi_process_netmgr_ev DSI_EVT_NET_IS_CONN
+      --> dsi_netmgr_post_event
+         --> dsi_notify_users
+            --> st->net_ev_cb = qcril_data_net_cb evt->evt = DSI_EVT_NET_IS_CONN
+               --> qcril_data_post_dsi_netctrl_event evt->evt = DSI_EVT_NET_IS_CONN event_id = QCRIL_EVT_DATA_EVENT_CALLBACK
+                  --> qcril_event_queue
+                     --> qcril_event_add_to_list (qcril_event)
+         --> dsi_detach_dsi_iface
+         
+qcril_event_main
+   --> qcril_process_event
+      --> qcril_hash_table_lookup
+      --> qcril_dispatch_event
+         --> (entry_ptr->handler)(params_ptr, &ret) = qcril_data_event_hdlr
+            --> qcril_data_validate_call_technology
+            --> dsi_get_device_name
+            --> qmi_wds_srvc_init_client
+            --> qcril_data_util_fill_call_params
+            --> qcril_data_util_update_call_state
+                                                   --> QcConnectivityService.ConnectivityServiceHSM.processMessage
+                                               --> sendMessageAtFrontOfQueue (HSM_HANDLE_CONNECT)
+                                               
+                                               --> handleConnect
+                                                  --> handleConnectivityChange
+                                                     --> updateRoutes
+                                                        --> QcConnectivityService.this.addRoute
+                                                           --> modifyRoute
+                                                              --> mAddedRoutes.add
+                                                              --> mNetd.addRoute
+      --> processSolicited
+         --> responseSetupDataCall
+           --> rr.mResult.sendToTarget() EVENT_SETUP_DATA_CONNECTION_DONE
+              --> DcActivatingState.processMessage
+                 --> onSetupConnectionCompleted
+                    --> updateLinkProperty
+                 --> transitionTo
+
+ds_cmdthrd_main
+   --> ds_cmdq_deq
+   --> (*(cmd->execute_f))(cmd, cmd->data);  = dsi_netctrl_cb_cmd_exec
+      --> dsi_process_wds_ind/dsi_process_async_wds_rsp/dsi_process_qos_ind/dsi_process_qmi_sys_ind/dsi_process_netmgr_ev
+         --> dsi_process_start_nw_async_rsp
+            --> st->net_ev_cb = qcril_data_net_cb
+            --> qcril_event_queue
+               --> qcril_event_add_to_list
+         --> dsi_process_wds_ind
+            --> dsi_handle_pkt_srvc_ind
+
+qcril_event_main
+   --> qcril_process_event
+      --> qcril_hash_table_lookup
+      --> qcril_dispatch_event
+
+Netmgr
+netmgr_kif_nl_post_addr_msg/netmgr_sm_state_inited_entry/netmgr_sm_state_up_entry/netmgr_sm_qos_activate/netmgr_sm_qos_modify
+netmgr_sm_state_up_entry event_info->event = NET_PLATFORM_UP_EV
+netmgr_kif_send_event nlh->nlmsg_type = NETMGR_NL_EVENT
+   --> netmgr_nl_send_msg
+   
+                                                              --> mAddedRoutes.add
+                                                              --> mNetd.addRoute
+
+AP and MP message flow
+qmi_ril_bootup_perform_core_or_start_polling/qmi_ril_core_init_kicker_main_threaded_proc
+qmi_ril_core_init
+qcril_data_init
+   --> qcril_data_qmi_wds_init
+      --> qmi_client_init (msg_handler qcril_data_qmi_dsd_ind_cb)
+         --> qmi_service_connection_init for QMI_PORT_RMNET_1
+         --> qmi_service_init
+         
+qcril_data_qmi_dsd_ind_cb
+   --> qmi_client_message_decode QMI_DSD_SYSTEM_STATUS_IND_V01
+   --> qcril_event_queue QCRIL_EVT_DATA_DSD_EVENT_CALLBACK
+
+qcril_event_main
+   --> qcril_process_event
+      --> qcril_hash_table_lookup
+      --> qcril_dispatch_event
+         --> (entry_ptr->handler)(params_ptr, &ret) = qcril_data_dsd_event_hdlr
+
+
+DSI_Netctrl_daemon.c
+main
+   --> dsi_init
+      --> dsi_init_internal
+         --> dsi_init_ifaces
+            --> dsi_mni_vtbl.mni_init_f = dsi_mni_init
+               --> qmi_init (dsi_qmi_sys_cb)
+                  --> qmi_service_pwr_up_init (qmi_sys_event_hdlr) qmi_service_receive_msg_hdlr, qmi_service_sys_event_handler
+                     --> qmi_qmux_if_pwr_up_init
+                        --> qmi_qmux_if_pwr_up_init_ex
+                           --> qmi_qmux_pwr_up_init
+                              --> qmi_ctl_powerup_init
+                              --> QMI_QMUX_IO_PLATFORM_PWR_UP_INIT(qmi_qmux_rx_msg,qmi_qmux_event_cb);
+                           --> QMI_QMUX_IF_PLATFORM_CLIENT_INIT = linux_qmi_qmux_if_client_init
+                              --> Connect to socket and start thread on linux_qmi_qmux_if_rx_msg
+                  --> QMI_SLL_ADD (sys_event_client_data,qmi_sys_event_client_list);
+               --> qdi_init
+               --> dsi_mni_init_client
+            --> dsi_netctrl_cb_init
+      --> dsi_init_netmgr_general
+         --> netmgr_client_register (dsi_netmgr_cb)
+   --> qmi_init
+      --> qmi_service_pwr_up_init (qmi_sys_event_hdlr)
+
+
+Lyra Connectivity System Design-v04.pdf->Page 6: Where is this information come from?
+Lyra Connectivity System Design-v04.pdf->Page 12: Supports ESP in EDP encapsulation --> Should be ESP in UDP?
+
+IP-LTE+UDP-M+ESP+TCP+DATA  -----> IP-WLAN+UDP-A+ESP+TCP+DATA --> IP-WLAN+ESP+IP-WLAN+UDP-A+ESP+TCP+DATA
+IP-LTE+ESP+TCP+DATA  -----> IP-WLAN+UDP
+IP-LTE+TCP/UDP+DATA  -----> IP-WLAN+TCP/UDP+DATA --> IP-WLAN+UDP-A+ESP+IP-WLAN+TCP/UDP+DATA
+
+outgoing:
+IP-LTE+TCP/UDP+DATA  -----> IP-WLAN+UDP-4500+ESP+IP-LTE+TCP/UDP+DATA
+
+incoming:
+IP-WLAN+UDP-4500+ESP+IP-LTE+TCP/UDP+DATA -----> IP-LTE+TCP/UDP+DATA
+IP-WLAN+UDP-4500+ESP+IKE -----> IP-LTE+TCP/UDP+DATA
+
+
+eNodeB = Combined functionality of NodeB and most of RNC
+MMD = Combined functionality of some of RNC and GGSN/SGSN
+S-GW = SGSN
+P-GW = GGSN
+
+
+1. WLAN connection is established
+2. CNE is notified about the WLAN connection establishment and then it communicates with MP to setup reverse RMNET interface
+3. When reverse RMNET interface is ready, IKE starts to negociate with ePDG and then try to setup IPSec tunnel
+4. 
+
+ActivityManagerService.systemReady
+    AppGlobals.getPackageManager().getPersistentApplications
+    ActivityManagerService.addAppLocked
+    
+PhoneApp.onCreate
+    new MSimPhoneGlobals or new PhoneGlobals
+    mPhoneGlobals.onCreate
+        MSimPhoneFactory.makeMultiSimDefaultPhones
+        MSimPhoneFactory.getDefaultPhone
+        createImsService
+        createCsvtService
+        MSimNotificationMgr.init
+        send EVENT_START_SIP_SERVICE
+        CallController.init
+        MSimPhoneInterfaceManager.init
+        MSimCallNotifier.init
+        
+MSimDialerActivity.startOutgoingCall
+
+DialpadFragment.onClick
+DialpadFragment.dialButtonPressed
+OutgoingCallBroadcaster.onCreate
+OutgoingCallBroadcaster.processIntent
+startActivityForResult
+MSimDialerActivity.onCreate
+MSimDialerActivity.onResume
+MSimDialerActivity.startOutgoingCall
+OutgoingCallBroadcaster.onActivityResult
+OutgoingCallBroadcaster.processMSimIntent
+    emergency: PhoneGlobals.getInstance().callController.placeCall
+    SIP: startSipCallOptionHandler
+    processAddParticipant
+        PhoneUtils.addParticipant
+            phone.addParticipant
+                mCT.addParticipant
+                    cm.addParticipant
+                        processDial
+                        encodeMsg(ImsQmiIF.REQUEST_ADD_PARTICIPANT, result, dialb);
+            sendOrderedBroadcastAsUser (ACTION_NEW_OUTGOING_CALL)
+                OutgoingCallBroadcaster.OutgoingCallReceiver.onReceive
+                    OutgoingCallBroadcaster.OutgoingCallReceiver.doReceive
+InCallActivity.internalResolveIntent
+OutgoingCallBroadcaster.startSipCallOptionHandler
+SipCallOptionHandler.setResultAndFinish
+PhoneUtils.convertCallToIms
+PhoneGlobals.getInstance().callController.placeCall
+callController.placeCallInternal
+PhoneUtils.pickPhoneBasedOnNumber
+PhoneUtils.placeCall
+app.mCM.dial = CallManager.dial
+basePhone.dial = imsPhone.dial
+ImsCallTracker.dial
+cm.dial = ImsSenderRxr.dial
+ImsSenderRxr.encodeMsg(ImsQmiIF.REQUEST_DIAL, result, dialb);
+ImsSenderRxr.send
+       s.getOutputStream().write
+            
+qcril_qmi_generic_socket_agent::start_socket_server
+   qcril_qmi_generic_socket_agent::init_socket_listenfd
+   qcril_qmi_singleton_agent<T>::init
+       qcril_qmi_singleton_agent<T>::create_thread
+           qcril_qmi_singleton_agent<T>::thread_func_wrapper
+               qcril_qmi_ims_socket_agent::thread_func
+                   qcril_qmi_ims_socket_agent::init_socket_listenfd
+                   qcril_qmi_ims_socket_agent::recv_thread_handler
+                       recv
+                       qcril_qmi_ims_socket_agent::process_incoming_message
+                           qcril_qmi_ims_parse_packed_msg (IMS__MSG_ID__REQUEST_DIAL --> QCRIL_EVT_IMS_SOCKET_REQ_DIAL)
+                           hlos_csvt_request_handler
+                           QCRIL_EVT_IMS_SOCKET_REQ_DIAL: qcril_qmi_voice_process_for_ims_dial
+                               qcril_setup_timed_callback_ex_params
+                           qcril_qmi_voice_ims_dial_call_handler
+                               qcril_qmi_voice_request_dial
+                                   qmi_client_send_msg_async
+
+ImsService.onCreate
+ImsSenderRxr.getImsRegistrationState (REQUEST_IMS_REGISTRATION_STATE)
+process_incoming_message
+qcril_qmi_ims_parse_packed_msg (IMS__MSG_ID__REQUEST_IMS_REGISTRATION_STATE)
+QCRIL_EVT_IMS_SOCKET_IMS_REGISTRATION_STATE
+qcril_qmi_imsa_request_ims_registration_state
+qcril_qmi_client_send_msg_async
+
+qmi_ril_core_init
+qcril_qmi_client_init
+qcril_qmi_init_core_client_handles
+qcril_qmi_init_imsa_client_handles
+qcril_qmi_init_imsa_client_handles_proc
+qcril_qmi_imsa_command_cb
+qcril_event_queue (QCRIL_EVT_QMI_IMSA_HANDLE_COMM_CALLBACKS)
+qcril_qmi_imsa_command_cb_helper
+QMI_IMSA_GET_REGISTRATION_STATUS_RSP_V01
+qcril_qmi_imsa_get_reg_status_resp_hdlr
+
+SMS over IMS:
+SmsManager.sendMultipartTextMessage
+    IccSmsInterfaceManagerProxy.sendMultipartText
+        IccSmsInterfaceManager.sendMultipartText
+            ImsSMSDispatcher.sendMultipartText    
+                SMSDispatcher.sendMultipartText
+                    GsmSMSDispatcher.sendNewSubmitPdu
+                        SMSDispatcher.sendRawPdu
+                            GsmSMSDispatcher.sendSms
+                                RIL.sendImsGsmSms
+
+SRVCC Handover:
+On reception of EVENT_HANDOVER_STATE_CHANGED
+    ImsCallTracker.handleMessage
+        ImsCallTracker.handleHandover
+            ImsQmiIF.START
+            ImsQmiIF.COMPLETE_SUCCESS
+                sendEmptyMessage(EVENT_OPERATION_COMPLETE)
+                
+                ImsCallTracker.handleMessage
+                    operationComplete
+                        cm.getCurrentCalls (EVENT_POLL_CALLS_RESULT)
+
+                ImsCallTracker.handleMessage
+                    handlePollCalls
+                        cm.getCurrentCalls (EVENT_POLL_CALLS_RESULT)
+                        
+                            process_incoming_message
+                                qcril_qmi_ims_parse_packed_msg (QCRIL_EVT_IMS_SOCKET_REQ_GET_CURRENT_CALLS)
+                                    qcril_event_queue
+                                        qcril_qmi_voice_request_get_current_ims_calls
+                                            qcril_qmi_get_call_list_to_send
+                                
+
+VT Call:
+VideoCallPanel
+mVideoCallManager
+    PARAM_READY_EVT
+    onParamReadyEvent
+        initializeCameraParams
+
+CallNotifier
+onNewRingingConnection
+CallHandlerServiceProxy.onIncoming
+CallHandlerServiceProxy.processIncoming
+mCallHandlerServiceGuarded.onIncoming
+CallHandlerService.onIncoming
+mMainHandler.sendMessage (ON_UPDATE_CALL_WITH_TEXT_RESPONSES)
+CallList.onIncoming
+InCallPresenter.onIncomingCall
+CallCardPresenter.onIncomingCall
+CallCardPresenter.onStateChange
+CallCardFragment.setCallState
+    updateVideoCallState ()
+        initVideoCall
+            onCallInitiating
+        showVideoCallWidgets
+            setPanelElementsVisibility
+                mFarEndView.setVisibility
+                initializeCamera
+                    openCamera
+                        startPreviewAndRecording
+    
+    onSurfaceTextureAvailable
+        initializeCamera
+            openCamera
+                mVideoCallManager.openCamera
+                    mCameraHandler.open
+                        ImsCamera.open
+                            ImsCamera.openImpl
+                                native_open
+                                    dpl_cameraOpen
+                                ImsCamera
+            initializeCameraParams
+            startPreviewAndRecording
+        mVideoCallManager.setFarEndSurface
+            MediaHandler.setSurface
+                nativeSetSurface
+                    dpl_setSurface
+    
+JNI_OnLoad
+    register_videophone_Dpl
+        vt_apis = vt_load_impl_lib
+        
+        #define DEFAULT_IMPL_LIB_PATH "/vendor/lib/lib-imsvt.so"
+        #define IMPL_LIB_PROPERTY_NAME "vt.impl.lib"
+#define DEFAULT_IMPL_LIB_PATH "/vendor/lib/lib-imsvt.so"
+#define IMPL_LIB_PROPERTY_NAME "vt.impl.lib"
+
+
+qcril_qmi_client_init
+    client_info.client_cbs[QCRIL_QMI_CLIENT_VOICE] = qcril_qmi_voice_command_cb
+        qcril_event_queue (QCRIL_EVT_QMI_VOICE_HANDLE_COMM_CALLBACKS)
+            qcril_qmi_voice_command_cb_helper
+                qcril_qmi_voice_query_call_forward_status_resp_hdlr (QMI_VOICE_GET_CALL_FORWARDING_RESP_V02)

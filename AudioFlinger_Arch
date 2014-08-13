@@ -1,0 +1,83 @@
+AudioTrack::AudioTrack
+    --> AudioTrack:set
+       --> AudioSystem::getOutput
+          --> AudioPolicyService::getOutput
+             --> mpAudioPolicy->get_output = ap_get_output
+                --> qap->apm->getOutput = AudioPolicyManagerBase::getOutput
+                   --> mpClientInterface->openOutput = AudioPolicyCompatClient::openOutput
+                      --> mServiceOps->open_output_on_module = aps_ops.aps_open_output_on_module
+                         --> af->openOutput = AudioFlinger::openOutput
+                            --> hwDevHal->open_output_stream
+                               --> thread = new MixerThread
+                               --> mPlaybackThreads.add
+       --> AudioTrack::createTrack_l
+          --> audioFlinger->createTrack
+             --> thread->createTrack_l
+             --> new TrackHandle(track)
+                --> new PlaybackThread::Track
+                --> mTracks.add(track)
+
+typedef enum {
+    AUDIO_STREAM_DEFAULT          = -1,
+    AUDIO_STREAM_VOICE_CALL       = 0,
+    AUDIO_STREAM_SYSTEM           = 1,
+    AUDIO_STREAM_RING             = 2,
+    AUDIO_STREAM_MUSIC            = 3,
+    AUDIO_STREAM_ALARM            = 4,
+    AUDIO_STREAM_NOTIFICATION     = 5,
+    AUDIO_STREAM_BLUETOOTH_SCO    = 6,
+    AUDIO_STREAM_ENFORCED_AUDIBLE = 7, /* Sounds that cannot be muted by user and must be routed to speaker */
+    AUDIO_STREAM_DTMF             = 8,
+    AUDIO_STREAM_TTS              = 9,
+
+    AUDIO_STREAM_CNT,
+    AUDIO_STREAM_MAX              = AUDIO_STREAM_CNT - 1,
+} audio_stream_type_t;
+
+AudioTrack::write
+   --> AudioTrack::releaseBuffer
+      --> AudioTrack::Start
+         --> mAudioTrack->start = IAudioTrack.start
+            --> TrackHandle.start
+               --> mTrack->start
+                  --> PlaybackThread::Track.start
+                     --> playbackThread->addTrack_l
+                        --> mActiveTracks.add
+                        --> mWaitWorkCV.broadcast
+                        
+                        --> PlaybackThread.threadLoop
+                           --> mWaitWorkCV.wait
+                           --> MixerThread::prepareTracks_l
+                              --> mAudioMixer->setParameter
+                           --> MixerThread::threadLoop_mix
+                              --> mAudioMixer->process
+                                 --> mState.hook = process__OneTrack16BitsStereoNoResampling
+                           --> MixerThread::threadLoop_write
+                              --> PlaybackThread::threadLoop_write
+                                 --> mOutput->stream->write
+
+main
+   --> AudioPolicyService::AudioPolicyService
+      --> hw_get_module
+      --> audio_policy_dev_open
+      --> mpAudioPolicyDev->create_audio_policy = create_qcom_ap
+      --> create_legacy_ap/create_qcom_ap
+         --> createAudioPolicyManager
+            --> AudioPolicyManager::AudioPolicyManager
+               --> AudioPolicyManagerBase::AudioPolicyManagerBase
+                  --> loadAudioPolicyConfig(AUDIO_POLICY_VENDOR_CONFIG_FILE)
+                  --> loadAudioPolicyConfig ( AUDIO_POLICY_CONFIG_FILE)
+                  --> defaultAudioPolicyConfig
+                  --> mpClientInterface->loadHwModule = AudioPolicyCompatClient::loadHwModule
+                     --> mServiceOps->load_hw_module = aps_ops.load_hw_module
+                        --> aps_load_hw_module
+                           --> AudioFlinger::loadHwModule
+                              --> loadHwModule_l
+                                 --> load_audio_interface
+                                    --> mAudioHwDevs.add
+                  --> AudioFlinger::openOutput
+                     --> hwDevHal->open_output_stream
+                     --> thread = new MixerThread
+                     --> mPlaybackThreads.add
+                     
+               
