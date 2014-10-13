@@ -56,7 +56,7 @@ AudioTrack::write
                               --> PlaybackThread::threadLoop_write
                                  --> mOutput->stream->write
 
-main
+main  main_mediaserver.cpp
    --> AudioPolicyService::AudioPolicyService
       --> hw_get_module
       --> audio_policy_dev_open
@@ -81,3 +81,6 @@ main
                      --> mPlaybackThreads.add
                      
                
+AudioFlinger::TrackHandle::start
+AudioFlinger::PlaybackThread::Track::start
+   ---> playbackThread->addTrack_l
