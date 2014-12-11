@@ -81,6 +81,6 @@ main  main_mediaserver.cpp
                      --> mPlaybackThreads.add
                      
                
-AudioFlinger::TrackHandle::start
+AudioFlinger::TrackHandle::start/AudioFlinger::PlaybackThread::OutputTrack::start
 AudioFlinger::PlaybackThread::Track::start
    ---> playbackThread->addTrack_l
